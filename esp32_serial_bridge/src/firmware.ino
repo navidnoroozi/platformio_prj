@@ -54,9 +54,9 @@
 
 // ── PID gains ────────────────────────────────────────────────────────────────
 // Tune these once the robot is assembled and driving
-#define KP  3.0
-#define KI  0.8
-#define KD  0.05
+#define KP  3.0   // Keep as it is - provides adequate initial kick for velocity control
+#define KI  3.5   // increase from 0.8 -> 3.5 to reduce steady-state error 
+#define KD  0.08  // increase from 0.05 -> 0.08 to reduce overshoot and oscillations  
 
 // ── Encoder state (volatile — modified in ISR) ───────────────────────────────
 volatile long left_ticks  = 0;
