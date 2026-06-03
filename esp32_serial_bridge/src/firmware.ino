@@ -47,14 +47,17 @@
 #define RIGHT_PWM_CH   1       // LEDC channel 1 for right motor
 
 // ── Robot parameters ─────────────────────────────────────────────────────────
-#define COUNTS_PER_REV   937   // 11 CPR × 21.3 gear ratio × 4 quadrature
+// Nominal value COUNTS_PER_REV: 937 -> 11 CPR × 21.3 gear ratio × 4 quadrature, but not fitting the observed data.
+// Derived from calibration: 1001 ticks/m × π × 0.065 m/rev = 204 ticks/rev. 
+// The formula is: COUNTS_PER_REV = (TICKS_PER_METER × WHEEL_CIRCUMFERENCE) / GEAR_RATIO, where TICKS_PER_METER is 1001, WHEEL_CIRCUMFERENCE is π × 0.065 m, and GEAR_RATIO is 21.3.
+#define COUNTS_PER_REV   450   // try a bigger value    
 #define MOTOR_MAX_RPM    259   //173   // 280 RPM × (7.4V / 12V)
 #define CONTROL_HZ       50    // PID loop runs at 50 Hz
 #define CONTROL_PERIOD_US (1000000UL / CONTROL_HZ)
 
 // ── PID gains ────────────────────────────────────────────────────────────────
 // Tune these once the robot is assembled and driving
-#define KP  3.0   // Keep as it is - provides adequate initial kick for velocity control
+#define KP  3.0   // was 3.0 //Keep as it is - provides adequate initial kick for velocity control
 #define KI  3.5   // increase from 0.8 -> 3.5 to reduce steady-state error 
 #define KD  0.08  // increase from 0.05 -> 0.08 to reduce overshoot and oscillations  
 
