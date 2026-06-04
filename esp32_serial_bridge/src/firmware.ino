@@ -50,24 +50,43 @@
 // Nominal value COUNTS_PER_REV: 937 -> 11 CPR × 21.3 gear ratio × 4 quadrature, but not fitting the observed data.
 // Derived from calibration: 1001 ticks/m × π × 0.065 m/rev = 204 ticks/rev. 
 // The formula is: COUNTS_PER_REV = (TICKS_PER_METER × WHEEL_CIRCUMFERENCE) / GEAR_RATIO, where TICKS_PER_METER is 1001, WHEEL_CIRCUMFERENCE is π × 0.065 m, and GEAR_RATIO is 21.3.
-#define COUNTS_PER_REV   450   // try a bigger value    
+// 4× quadrature: 204 ticks/rev (1× calibrated) × 4 = 816 ticks/rev
+// Calibration reminder: 1001 ticks/m at 1× → 4004 ticks/m at 4×
+// METRES_PER_TICK in serial_bridge_node.py must be set to 1.0 / 4004.0
+#define COUNTS_PER_REV   816
 #define MOTOR_MAX_RPM    259   //173   // 280 RPM × (7.4V / 12V)
 #define CONTROL_HZ       50    // PID loop runs at 50 Hz
 #define CONTROL_PERIOD_US (1000000UL / CONTROL_HZ)
 
 // ── PID gains ────────────────────────────────────────────────────────────────
 // Tune these once the robot is assembled and driving
-#define KP  3.0   // was 3.0 //Keep as it is - provides adequate initial kick for velocity control
-#define KI  3.5   // increase from 0.8 -> 3.5 to reduce steady-state error 
-#define KD  0.08  // increase from 0.05 -> 0.08 to reduce overshoot and oscillations  
+#define KP  1.5   // was 3.0 - provides adequate initial kick for velocity control
+#define KI  1.0   // increase from 0.8 -> 3.5 to reduce steady-state error, now try 1.0 
+#define KD  0.05  // increase from 0.05 -> 0.08 to reduce overshoot and oscillations, now set to 0.05 agian  
+
+// ── Encoder direction signs ──────────────────────────────────────────────────
+// Set to +1 or -1. Flip a sign if that wheel counts backward when rolling forward.
+// Verify with: push robot 1 m forward → both printed tick totals should be positive.
+#define LEFT_ENC_SIGN  -1
+#define RIGHT_ENC_SIGN +1
+
+// ── 4× quadrature state-transition table ─────────────────────────────────────
+// index = (previous_state << 2) | current_state
+// state encoding: (A_pin << 1) | B_pin
+// Gray-code sequence forward:  00→01→11→10→00  (+1 each step)
+// Gray-code sequence backward: 00→10→11→01→00  (-1 each step)
+const int8_t QUAD_TABLE[16] = {
+   0, +1, -1,  0,
+  -1,  0,  0, +1,
+  +1,  0,  0, -1,
+   0, -1, +1,  0
+};
 
 // ── Encoder state (volatile — modified in ISR) ───────────────────────────────
-volatile long left_ticks  = 0;
-volatile long right_ticks = 0;
-
-// Last encoder B state for quadrature decoding
-volatile int left_b_last  = 0;
-volatile int right_b_last = 0;
+volatile long    left_ticks  = 0;
+volatile long    right_ticks = 0;
+volatile uint8_t left_state  = 0;   // last known (A<<1)|B state for left
+volatile uint8_t right_state = 0;   // last known (A<<1)|B state for right
 
 // ── PID state ────────────────────────────────────────────────────────────────
 float left_target_rpm  = 0.0;
@@ -91,22 +110,23 @@ long left_ticks_report  = 0;
 long right_ticks_report = 0;
 unsigned long last_report_us = 0;
 
-// ── Encoder ISRs ─────────────────────────────────────────────────────────────
-// Called on rising edge of ENC_A. Read ENC_B to determine direction.
+// ── Encoder ISRs — 4× quadrature ─────────────────────────────────────────────
+// Each ISR fires on ANY edge of EITHER channel for that motor.
+// The state-transition table determines direction from the AB phase pattern.
 void IRAM_ATTR left_encoder_isr() {
-  if (digitalRead(LEFT_ENC_B) == LOW) {
-    left_ticks++;
-  } else {
-    left_ticks--;
-  }
+  uint8_t a    = digitalRead(LEFT_ENC_A);
+  uint8_t b    = digitalRead(LEFT_ENC_B);
+  uint8_t curr = (a << 1) | b;
+  left_ticks  += LEFT_ENC_SIGN * QUAD_TABLE[(left_state << 2) | curr];
+  left_state   = curr;
 }
 
 void IRAM_ATTR right_encoder_isr() {
-  if (digitalRead(RIGHT_ENC_B) == LOW) {
-    right_ticks--;
-  } else {
-    right_ticks++;
-  }
+  uint8_t a    = digitalRead(RIGHT_ENC_A);
+  uint8_t b    = digitalRead(RIGHT_ENC_B);
+  uint8_t curr = (a << 1) | b;
+  right_ticks += RIGHT_ENC_SIGN * QUAD_TABLE[(right_state << 2) | curr];
+  right_state  = curr;
 }
 
 // ── Motor output ─────────────────────────────────────────────────────────────
@@ -210,9 +230,15 @@ void setup() {
   pinMode(RIGHT_ENC_A, INPUT);
   pinMode(RIGHT_ENC_B, INPUT);
 
-  // Attach encoder interrupts (RISING edge of channel A)
-  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_A),  left_encoder_isr,  RISING);
-  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_A), right_encoder_isr, RISING);
+  // Initialise encoder states from current pin levels before attaching interrupts
+  left_state  = (digitalRead(LEFT_ENC_A)  << 1) | digitalRead(LEFT_ENC_B);
+  right_state = (digitalRead(RIGHT_ENC_A) << 1) | digitalRead(RIGHT_ENC_B);
+
+  // 4× quadrature: attach BOTH channels on CHANGE (both rising and falling edges)
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_A),  left_encoder_isr,  CHANGE);
+  attachInterrupt(digitalPinToInterrupt(LEFT_ENC_B),  left_encoder_isr,  CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_A), right_encoder_isr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_ENC_B), right_encoder_isr, CHANGE);
 
   stop_motors();
 
@@ -220,7 +246,7 @@ void setup() {
   last_report_us  = micros();
   last_cmd_ms     = millis();
 
-  Serial.println("ESP32 serial bridge ready");
+  Serial.println("ESP32 serial bridge ready (4x quadrature)");
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
@@ -291,13 +317,7 @@ void loop() {
   long report_dt_us = (long)(now2_us - last_report_us);
 
   if (report_dt_us >= 50000L) {  // 50 ms = 20 Hz
-    // Format: "E <left_ticks> <right_ticks> <dt_us>\n"
-    //Serial.print("E ");
-    //Serial.print(left_ticks_report);
-    //Serial.print(" ");
-    //Serial.print(right_ticks_report);
-    //Serial.print(" ");
-    //Serial.println(report_dt_us);
+    // Format: "E <left_ticks> <right_ticks> <dt_us> <left_target_rpm> <right_target_rpm>\n"
     Serial.print("E ");
     Serial.print(left_ticks_report);
     Serial.print(" ");
